@@ -1,5 +1,8 @@
 const express = require("express");
 const cors = require("cors");
+const mongoose = require("mongoose");
+const dotenv = require("dotenv");
+dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -104,6 +107,15 @@ app.post("/schedules/:username", (req, res) => {
 app.get("/", (req, res) => {
   res.json(database);
 });
+
+//👇🏻 connect to the database
+// mongoose
+//   .connect(process.env.MONGO_URL, {
+//     useNewUrlParser: true,
+//     useUnifiedTopology: true,
+//   })
+//   .then(() => console.log("Connected to Mongo Atlas"))
+//   .catch((err) => console.log(err.message));
 
 const port = process.env.PORT || 5000;
 app.listen(port, () => {
