@@ -1,121 +1,208 @@
-const express = require("express");
-const cors = require("cors");
-const mongoose = require("mongoose");
-const dotenv = require("dotenv");
+import express from "express";
+import cors from "cors";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
 dotenv.config();
+
+import { UserModel } from "./models/user-model.js";
+import { ResponseFormModel } from "./models/response-model.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 app.use(express.json());
 
-//👇🏻 array representing the data
-const database = [];
-//👇🏻 generates a random string as ID
-const generateID = () => Math.random().toString(36).substring(2, 10);
-
 app.post("/register", (req, res) => {
   const { username, email, password } = req.body;
-  //👇🏻 checks if the user does not exist
-  let result = database.filter(
-    (user) => user.email === email || user.username === username
-  );
-  //👇🏻 creates the user's data structure on the server
-  if (result.length === 0) {
-    database.push({
-      id: generateID(),
-      username,
-      password,
-      email,
-      timezone: {},
-      schedule: [],
+  const newUser = new UserModel({
+    username,
+    email,
+    password,
+    timezone: {},
+    schedule: [],
+    formResponse: [],
+  });
+
+  newUser
+    .save()
+    .then(() => {
+      return res.status(201).json({ message: "Account created successfully!" });
+    })
+    .catch((err) => {
+      return res.status(400).json({ error_message: err.message });
     });
-    return res.json({ message: "Account created successfully!" });
-  }
-  //👇🏻 returns an error
-  res.json({ error_message: "User already exists!" });
 });
 
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
   const { username, password } = req.body;
-  let result = database.filter(
-    (user) => user.username === username && user.password === password
-  );
-  //👇🏻 user doesn't exist
-  if (result.length !== 1) {
-    return res.json({
-      error_message: "Incorrect credentials",
-    });
+
+  const foundUser = await UserModel.findOne({ username });
+  if (!foundUser) {
+    return res.json({ error_message: "Incorrect credentials" });
   }
-  //👇🏻 user exists
-  res.json({
+  if (foundUser.password !== password) {
+    return res.json({ error_message: "Incorrect credentials" });
+  }
+
+  res.status(200).json({
     message: "Login successfully",
     data: {
-      _id: result[0].id,
-      _email: result[0].email,
-      _username: result[0].username,
+      _id: foundUser._id,
+      _email: foundUser.email,
+      _username: foundUser.username,
     },
   });
 });
 
-app.post("/schedule/create", (req, res) => {
+//✅
+app.post("/api/artist/set-schedule-timezone", (req, res) => {
   const { userId, timezone, schedule } = req.body;
-  //👇🏻 filters the database via the id
-  let result = database.filter((db) => db.id === userId);
-  //👇🏻 updates the user's schedule and timezone
-  result[0].timezone = timezone;
-  result[0].schedule = schedule;
-  res.json({ message: "OK" });
+
+  UserModel.findByIdAndUpdate(
+    userId,
+    {
+      timezone,
+      schedule,
+    },
+    { new: true }
+  )
+    .then((data) => {
+      res.status(200).json({
+        message: "Schedule created successfully",
+        data: data,
+      });
+    })
+    .catch((err) => {
+      res.status(400).json({
+        error_message: err.message,
+      });
+    });
 });
 
-app.get("/schedules/:id", (req, res) => {
+//✅Fetch the artist's schedule and timezone for profile page
+app.get("/api/artist/get-schedule/:id", (req, res) => {
   const { id } = req.params;
-  //👇🏻 filters the array via the ID
-  let result = database.filter((db) => db.id === id);
-  //👇🏻 returns the schedule, time and username
-  if (result.length === 1) {
-    return res.json({
-      message: "Schedules successfully retrieved!",
-      schedules: result[0].schedule,
-      username: result[0].username,
-      timezone: result[0].timezone,
+
+  UserModel.findById(id)
+    .then((userData) => {
+      res.status(200).json({
+        message: "Schedules fetched successfully",
+        data: userData,
+      });
+    })
+    .catch((err) => {
+      res.status(400).json({
+        error_message: err.message,
+      });
     });
-  }
-  //👇🏻 if user not found
-  return res.json({ error_message: "Sign in again, an error occured..." });
 });
 
-app.post("/schedules/:username", (req, res) => {
+//✅ To get artist's schedule and timezone for the form inputs
+app.post("/api/form/get-schedule-timezone", async (req, res) => {
   const { username } = req.body;
-  //👇🏻 filter the databse via the username
-  let result = database.filter((db) => db.username === username);
-  if (result.length === 1) {
-    const scheduleArray = result[0].schedule;
-    //👇🏻 return only the selected schedules
-    const filteredArray = scheduleArray.filter((sch) => sch.startTime !== "");
-    //return the schedules and other information
-    return res.json({
-      message: "Schedules successfully retrieved!",
-      schedules: filteredArray,
-      timezone: result[0].timezone,
-      receiverEmail: result[0].email,
-    });
+
+  try {
+    const foundUser = await UserModel.findOne({ username });
+    if (foundUser) {
+      const filteredSchedule = foundUser.schedule.filter(
+        (schedule) => schedule.startTime !== "" || schedule.endTime !== ""
+      );
+      return res.json({
+        message: "Schedules successfully retrieved!",
+        schedules: filteredSchedule,
+        timezone: foundUser.timezone,
+        receiverEmail: foundUser.email,
+      });
+    } else {
+      return res.json({ error_message: "User doesn't exist" });
+    }
+  } catch (err) {
+    return res.json({ error_message: err.message });
   }
-  return res.json({ error_message: "User doesn't exist" });
+});
+
+//✅ To save the submitted form
+app.post("/api/form/save-submitted-form", async (req, res) => {
+  const { user_id } = req.body;
+  const {
+    artistEmail,
+    clientEmail,
+    clientName,
+    message,
+    duration,
+    appointment,
+  } = req.body;
+
+  const foundUser = await UserModel.findById(user_id);
+  // console.log(foundUser.email);
+
+  if (foundUser.email !== "") {
+    if (foundUser.email !== artistEmail) {
+      console.log(foundUser.email);
+    }
+
+    const newResponse = new ResponseFormModel({
+      artist_id: user_id,
+      clientName: clientName,
+      clientEmail,
+      message,
+      duration,
+      appointment,
+    });
+
+    newResponse
+      .save()
+      .then(() => {
+        return res.json({ message: "Response saved" });
+      })
+      .catch((err) => {
+        console.log(err.message);
+        return res.json({ error_message: "Something went wrong!!" });
+      });
+  } else {
+    return res.json({ error_message: "User doesn't exist" });
+  }
+});
+
+//✅ To get the artist's form responses for Landing Page
+app.post("/api/form/get-form-responses", (req, res) => {
+  const { userID } = req.body;
+
+  ResponseFormModel.find({ artist_id: userID })
+    .then((data) => {
+      console.log(data);
+      return res.json({
+        message: "Form response fetched successfully",
+        data: data,
+      });
+    })
+    .catch((err) => {
+      return res.json({ error_message: err.message });
+    });
 });
 
 app.get("/", (req, res) => {
-  res.json(database);
+  //Display all users from mongoose
+  const users = UserModel.find({});
+  users
+    .then((data) => {
+      res.status(200).json({
+        message: "Users fetched successfully",
+        data: data,
+      });
+    })
+    .catch((err) => {
+      res.status(400).json({
+        error_message: err.message,
+      });
+    });
 });
 
 //👇🏻 connect to the database
-// mongoose
-//   .connect(process.env.MONGO_URL, {
-//     useNewUrlParser: true,
-//     useUnifiedTopology: true,
-//   })
-//   .then(() => console.log("Connected to Mongo Atlas"))
-//   .catch((err) => console.log(err.message));
+mongoose
+  .connect("mongodb+srv://harimuthuu:hari123@sa.4oon3kk.mongodb.net/sa-app", {})
+  .then(() => console.log("Connected to Mongo Atlas"))
+  .catch((err) => console.log(err.message));
 
 const port = process.env.PORT || 5000;
 app.listen(port, () => {
